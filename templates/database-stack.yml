@@ -1,0 +1,68 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Parameters:
+  AvailabilityZone:
+    Type: String
+  PrivateSubnetId:
+    Type: String
+  SecondaryPrivateSubnetId:
+    Type: String
+  DBSecurityGroupId:
+    Type: String
+  SecondaryDBSecurityGroupId:
+    Type: String
+
+Resources:
+
+  KmsDBPasswordKey:
+    Type: AWS::KMS::Key
+    Properties:
+      EnableKeyRotation: false
+      KeyPolicy:
+        Version: "2012-10-17"
+        Id: !Ref "AWS::StackName"
+        Statement:
+          - Sid: "Allow administration of the key"
+            Effect: "Allow"
+            Principal:
+              AWS:
+                Fn::Sub: 'arn:${AWS::Partition}:iam::${AWS::AccountId}:root'
+            Action:
+              - "kms:*"
+            Resource: "*"
+
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: 'Subnet for the DB'
+      DBSubnetGroupName: 'aws-certification-db-subnet-group'
+      SubnetIds:
+        - !Ref PrivateSubnetId
+        - !Ref SecondaryPrivateSubnetId
+
+  PostgresDatabase:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      Engine: postgres
+      EngineVersion: 16.3
+      AvailabilityZone: !Ref AvailabilityZone
+      DBInstanceIdentifier: AWS-Certification-DB
+      ManageMasterUserPassword: true
+      AutoMinorVersionUpgrade: false
+      MasterUsername: 'aws_certification_root'
+      MasterUserSecret:
+        KmsKeyId: !Ref KmsDBPasswordKey
+      PubliclyAccessible: false
+      DBInstanceClass: db.t4g.micro
+      StorageType: gp2
+      AllocatedStorage: 20
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !Ref DBSecurityGroupId
+        - !Ref SecondaryDBSecurityGroupId
+      DBName: certificationDatabase
+
+  
+Outputs:
+  DatabasePasswordSecretARN:
+    Value: PostgresDatabase.MasterUserSecret.SecretArn

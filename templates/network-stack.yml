@@ -1,0 +1,202 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Parameters:
+  AvailabilityZone:
+    Type: String
+  SecondaryAvailabilityZone:
+    Type: String
+
+
+Resources:
+
+  InitialVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/22
+      EnableDnsHostnames: true
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref InitialVPC
+      AvailabilityZone: !Ref AvailabilityZone
+      CidrBlock: 10.0.0.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: 'Public-Subnet'
+  
+  SecondaryPublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref InitialVPC
+      AvailabilityZone: !Ref SecondaryAvailabilityZone
+      CidrBlock: 10.0.3.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: 'Secondary-Public-Subnet'
+  
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref InitialVPC
+      AvailabilityZone: !Ref AvailabilityZone
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: 'Private-Subnet'
+  
+  SecondaryPrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref InitialVPC
+      AvailabilityZone: !Ref SecondaryAvailabilityZone
+      CidrBlock: 10.0.2.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: 'Private-Subnet-2'
+
+
+  # public subnet configuration
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+  
+  AttachGatewayToVPC:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref InitialVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref InitialVPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGatewayToVPC
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  AttachPublicRouteTableToSubnet:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+
+  # private subnet configuration
+
+  ElasticIpForNat:
+    Type: AWS::EC2::EIP
+    DependsOn: InitialVPC
+    Properties:
+      Domain: vpc
+     
+  NatGateway:
+    Type: AWS::EC2::NatGateway
+    DependsOn: ElasticIpForNat
+    Properties: 
+      SubnetId: !Ref PublicSubnet
+      AllocationId: !GetAtt ElasticIpForNat.AllocationId
+
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref InitialVPC
+  
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      NatGatewayId: !Ref NatGateway
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+  
+  AttachPrivateRouteTableToSubnet:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+
+  ## Security Groups
+
+  DBAccessSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'Security Group For Services Accessing the DB'
+      GroupName: 'database-access-security-group'
+      VpcId: !Ref InitialVPC
+
+  SSHAccessSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'Security Group For SSH machines'
+      GroupName: 'ssh-security-group'
+      VpcId: !Ref InitialVPC
+      SecurityGroupIngress:
+        - CidrIp: '0.0.0.0/0'
+          IpProtocol: 'tcp'
+          FromPort: 22
+          ToPort: 22
+
+  FullInternetAccessSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'Security Group For outbound access to the internet'
+      GroupName: 'internet-security-group'
+      VpcId: !Ref InitialVPC
+      SecurityGroupEgress:
+        - CidrIp: '0.0.0.0/0'
+          IpProtocol: '-1'
+
+  DBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'Security Group For The Database'
+      GroupName: 'database-security-group'
+      VpcId: !Ref InitialVPC
+      SecurityGroupIngress:
+        - SourceSecurityGroupId: !Ref DBAccessSecurityGroup
+          IpProtocol: 'tcp'
+          FromPort: 5432
+          ToPort: 5432
+
+  SecondaryDBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'Secondary Security Group For The Database'
+      GroupName: 'secondary-database-security-group'
+      VpcId: !Ref InitialVPC
+      SecurityGroupIngress:
+        - SourceSecurityGroupId: !Ref DBAccessSecurityGroup
+          IpProtocol: 'tcp'
+          FromPort: 5432
+          ToPort: 5432
+
+Outputs:
+  PrivateSubnetId:
+    Value: !Ref PrivateSubnet
+  SecondaryPrivateSubnetId:
+    Value: !Ref SecondaryPrivateSubnet
+  PublicSubnetId:
+    Value: !Ref PublicSubnet
+  SecondaryPublicSubnetId:
+    Value: !Ref SecondaryPublicSubnet
+  VpcId:
+    Value: !Ref InitialVPC
+  DBAccessSecurityGroupId:
+    Value: !Ref DBAccessSecurityGroup
+  DBSecurityGroupId:
+    Value: !Ref DBSecurityGroup
+  SecondaryDBSecurityGroupId:
+    Value: !Ref SecondaryDBSecurityGroup
+  SSHAccessSecurityGroupId:
+    Value: !Ref SSHAccessSecurityGroup
+  FullInternetAccessSecurityGroupId:
+    Value: !Ref FullInternetAccessSecurityGroup

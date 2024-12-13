@@ -1,0 +1,36 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Parameters:
+  AvailabilityZone:
+    Type: String
+  PublicSubnetId:
+    Type: String
+  DBAccessSecurityGroupId:
+    Type: String
+  FullInternetAccessSecurityGroupId:
+    Type: String
+  SSHAccessSecurityGroupId:
+    Type: String
+
+
+
+Resources:
+
+  SSHKeys:
+    Type: AWS::EC2::KeyPair
+    Properties:
+      KeyName: 'jumpbox-keypair'
+  
+  Jumpbox:
+    Type: AWS::EC2::Instance
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone
+      ImageId: 'ami-0453ec754f44f9a4a' #Free tier AWS linux AMI X86
+      InstanceType: 't2.micro'
+      SubnetId: !Ref PublicSubnetId
+      SecurityGroupIds:
+        - !Ref DBAccessSecurityGroupId
+        - !Ref FullInternetAccessSecurityGroupId
+        - !Ref SSHAccessSecurityGroupId
+      KeyName: !Ref SSHKeys
+      

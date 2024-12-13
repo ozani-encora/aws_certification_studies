@@ -1,0 +1,251 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Parameters:
+  AvailabilityZone:
+    Type: String
+  PublicSubnetId:
+    Type: String
+  SecondaryPublicSubnetId:
+    Type: String
+  PrivateSubnetId:
+    Type: String
+  DBAccessSecurityGroupId:
+    Type: String
+  FullInternetAccessSecurityGroupId:
+    Type: String
+  SSHAccessSecurityGroupId:
+    Type: String
+  VpcId:
+    Type: String
+
+
+
+Resources:
+
+  SnsTopic:
+    Type: AWS::SNS::Topic
+
+  SnsSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email-json
+      TopicArn: !Ref SnsTopic
+      Endpoint: otavio.zani@encora.com
+
+  SNSPolicyForS3:
+    Type: AWS::SNS::TopicPolicy
+    Properties:
+      Topics:
+        - !Ref SnsTopic
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - 'SNS:Publish'
+            Effect: Allow
+            Resource: !Ref SnsTopic
+            Principal:
+              Service: s3.amazonaws.com
+
+  UploadBucket:
+    Type: AWS::S3::Bucket
+    DependsOn: SNSPolicyForS3
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      NotificationConfiguration:
+        TopicConfigurations:
+          - Event: s3:ObjectCreated:*
+            Topic: !Ref SnsTopic
+
+  BucketNameParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: S3-name-certification
+      Type: String
+      Value: !Ref UploadBucket
+
+  LoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'Security Group For The Load Balancer'
+      GroupName: 'load-balancer-security-group'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - CidrIp: "0.0.0.0/0"
+          FromPort: 80
+          IpProtocol: "tcp"
+          ToPort: 80
+
+  ApplicationServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: 'Security Group For The App Server'
+      GroupName: 'app-server-security-group'
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+          IpProtocol: 'tcp'
+          FromPort: 8080
+          ToPort: 8080
+  
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateData:
+        ImageId: 'ami-03f07ed03f38a11c0' #Custom Image
+        InstanceType: 't2.micro'
+        SecurityGroupIds:
+          - !Ref FullInternetAccessSecurityGroupId
+          - !Ref ApplicationServerSecurityGroup
+        IamInstanceProfile:
+          Arn: arn:aws:iam::241533131033:instance-profile/Ec2-S3-Access
+        UserData: IyEvYmluL2Jhc2gKZXhwb3J0IEhPTUU9L2hvbWUvdWJ1bnR1CmV4cG9ydCBOVk1fRElSPSIkSE9NRS8ubnZtIgpbIC1zICIkTlZNX0RJUi9udm0uc2giIF0gJiYgXC4gIiROVk1fRElSL252bS5zaCIKWyAtcyAiJE5WTV9ESVIvYmFzaF9jb21wbGV0aW9uIiBdICYmIFwuICIkTlZNX0RJUi9iYXNoX2NvbXBsZXRpb24iCmNkICIkSE9NRS9hcHAiCm52bSB1c2UKbm9kZSAiJEhPTUUvYXBwL2luZGV4LmpzIg==
+
+  AutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AvailabilityZones:
+        - !Ref AvailabilityZone
+      VPCZoneIdentifier:
+        - !Ref PrivateSubnetId
+      LaunchTemplate:
+        LaunchTemplateId: !Ref LaunchTemplate
+        Version: !GetAtt LaunchTemplate.LatestVersionNumber
+      MinSize: 1
+      MaxSize: 1
+      DesiredCapacityType: units
+      DesiredCapacity: 1
+      AvailabilityZoneDistribution:
+        CapacityDistributionStrategy: balanced-best-effort
+      CapacityReservationSpecification:
+        CapacityReservationPreference: default
+      HealthCheckType: EC2
+      DefaultInstanceWarmup: -1
+      HealthCheckGracePeriod: 300
+      TargetGroupARNs:
+        - !Ref AutoScalingGroupTargetGroup
+      
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      IpAddressType: ipv4
+      SecurityGroups:
+        - !Ref LoadBalancerSecurityGroup
+      Type: application
+      Subnets:
+        - !Ref PublicSubnetId
+        - !Ref SecondaryPublicSubnetId
+      LoadBalancerAttributes: 
+        - Key: "access_logs.s3.enabled"
+          Value: "false"
+        - Key: "idle_timeout.timeout_seconds"
+          Value: "60"
+        - Key: "deletion_protection.enabled"
+          Value: "false"
+        - Key: "routing.http2.enabled"
+          Value: "true"
+        - Key: "routing.http.drop_invalid_header_fields.enabled"
+          Value: "false"
+
+  HTTPListener:
+    Type: "AWS::ElasticLoadBalancingV2::Listener"
+    Properties:
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: 80
+      Protocol: "HTTP"
+      DefaultActions: 
+        - Order: 1
+          FixedResponseConfig: 
+            ContentType: 'text/plain'
+            MessageBody: 'Not Found'
+            StatusCode: 404
+          Type: "fixed-response"
+  
+  AutoScalingGroupTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckEnabled: true
+      HealthCheckIntervalSeconds: 20
+      HealthCheckPath: '/health'
+      HealthCheckPort: 'traffic-port'
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 5
+      IpAddressType: ipv4
+      Matcher:
+        HttpCode: 200-299
+      Port: 8080
+      Protocol: HTTP
+      VpcId: !Ref VpcId
+
+  TargetGroupLoadBalancerAssociation:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+        - Type: forward
+          TargetGroupArn: !Ref AutoScalingGroupTargetGroup
+          Order: 1
+      Conditions:
+        - Field: path-pattern
+          PathPatternConfig:
+            Values:
+              - '/health'
+              - '/upload/*'
+      ListenerArn: !Ref HTTPListener
+      Priority: 1
+
+  S3OAC:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: OacForS3Access
+        OriginAccessControlOriginType: s3
+        SigningBehavior: always
+        SigningProtocol: sigv4
+
+  Cloudfront:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Origins:
+          - DomainName: !GetAtt UploadBucket.RegionalDomainName
+            Id: origin-id-s3
+            S3OriginConfig:
+              OriginAccessIdentity: ''
+            OriginAccessControlId: !Ref S3OAC
+        PriceClass: PriceClass_100
+        Enabled: Yes
+        DefaultCacheBehavior:
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+          Compress: true
+          ViewerProtocolPolicy: redirect-to-https
+          TargetOriginId: origin-id-s3
+          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6 #caching optimized
+
+  BucketPolicyForCloudfront:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref UploadBucket
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Action:
+              - 's3:GetObject'
+            Effect: Allow
+            Resource: !Sub arn:aws:s3:::${UploadBucket}/*
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Condition:
+              StringEquals:
+                'AWS:SourceArn': !Sub arn:aws:cloudfront::${AWS::AccountId}:distribution/${Cloudfront}

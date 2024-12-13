@@ -1,0 +1,61 @@
+AWSTemplateFormatVersion: "2010-09-09"
+
+Parameters:
+  TemplatesBucketBaseURL:
+    Type: String
+  AvailabilityZone:
+    Type: String
+    Default: us-east-1a
+  SecondaryAvailabilityZone:
+    Type: String
+    Default: us-east-1b
+
+Resources: 
+  
+  NetworkStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub ${TemplatesBucketBaseURL}/network-stack.yml
+      Parameters:
+        AvailabilityZone: !Ref AvailabilityZone
+        SecondaryAvailabilityZone: !Ref SecondaryAvailabilityZone
+
+  JumpboxStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: NetworkStack
+    Properties:
+      TemplateURL: !Sub ${TemplatesBucketBaseURL}/jumpbox-stack.yml
+      Parameters:
+        DBAccessSecurityGroupId: !GetAtt NetworkStack.Outputs.DBAccessSecurityGroupId
+        AvailabilityZone: !Ref AvailabilityZone
+        PublicSubnetId: !GetAtt NetworkStack.Outputs.PublicSubnetId
+        FullInternetAccessSecurityGroupId: !GetAtt NetworkStack.Outputs.FullInternetAccessSecurityGroupId
+        SSHAccessSecurityGroupId: !GetAtt NetworkStack.Outputs.SSHAccessSecurityGroupId
+
+  DatabaseStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: NetworkStack
+    Properties:
+      TemplateURL: !Sub ${TemplatesBucketBaseURL}/database-stack.yml
+      Parameters:
+        AvailabilityZone: !Ref AvailabilityZone
+        PrivateSubnetId: !GetAtt NetworkStack.Outputs.PrivateSubnetId
+        DBSecurityGroupId: !GetAtt NetworkStack.Outputs.DBSecurityGroupId
+        SecondaryDBSecurityGroupId: !GetAtt NetworkStack.Outputs.SecondaryDBSecurityGroupId
+        SecondaryPrivateSubnetId: !GetAtt NetworkStack.Outputs.SecondaryPrivateSubnetId
+
+  AppStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: NetworkStack
+    Properties:
+      TemplateURL: !Sub ${TemplatesBucketBaseURL}/app-stack.yml
+      Parameters:
+        DBAccessSecurityGroupId: !GetAtt NetworkStack.Outputs.DBAccessSecurityGroupId
+        AvailabilityZone: !Ref AvailabilityZone
+        PublicSubnetId: !GetAtt NetworkStack.Outputs.PublicSubnetId
+        SecondaryPublicSubnetId: !GetAtt NetworkStack.Outputs.SecondaryPublicSubnetId
+        FullInternetAccessSecurityGroupId: !GetAtt NetworkStack.Outputs.FullInternetAccessSecurityGroupId
+        SSHAccessSecurityGroupId: !GetAtt NetworkStack.Outputs.SSHAccessSecurityGroupId
+        PrivateSubnetId: !GetAtt NetworkStack.Outputs.PrivateSubnetId
+        VpcId: !GetAtt NetworkStack.Outputs.VpcId
+
